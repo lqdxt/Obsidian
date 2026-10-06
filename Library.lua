@@ -687,6 +687,23 @@ local function WaitForEvent(Event, Timeout, Condition)
     return Result
 end
 
+local function MatchesDragInput(StartedInput: InputObject?, Input: InputObject): boolean
+    if not StartedInput then
+        return false
+    end
+
+    local StartedType = StartedInput.UserInputType
+    if StartedType == Enum.UserInputType.Touch then
+        return Input == StartedInput
+    elseif StartedType == Enum.UserInputType.MouseButton1
+        or StartedType == Enum.UserInputType.MouseButton2
+    then
+        return Input.UserInputType == Enum.UserInputType.MouseMovement
+    end
+
+    return false
+end
+
 local function IsMouseInput(Input: InputObject, IncludeM2: boolean?)
     return Input.UserInputType == Enum.UserInputType.MouseButton1
         or (IncludeM2 == true and Input.UserInputType == Enum.UserInputType.MouseButton2)
@@ -2273,6 +2290,7 @@ function Library:MakeDraggable(
     local StartPos
     local FramePos
     local Dragging = false
+    local DragInput: InputObject?
     local Changed
     local InputBegan
     local InputChanged
@@ -2326,6 +2344,7 @@ function Library:MakeDraggable(
         StartPos = Input.Position
         FramePos = UI.Position
         Dragging = true
+        DragInput = Input
 
         Changed = Input.Changed:Connect(function()
             if Input.UserInputState ~= Enum.UserInputState.End then
@@ -2333,6 +2352,7 @@ function Library:MakeDraggable(
             end
 
             Dragging = false
+            DragInput = nil
             HideSnapGuides()
 
             if Changed and Changed.Connected then
@@ -2349,6 +2369,7 @@ function Library:MakeDraggable(
             or not (ScreenGui and ScreenGui.Parent)
         then
             Dragging = false
+            DragInput = nil
             HideSnapGuides()
 
             if Changed and Changed.Connected then
@@ -2359,7 +2380,7 @@ function Library:MakeDraggable(
             return
         end
 
-        if Dragging and IsHoverInput(Input) then
+        if Dragging and IsHoverInput(Input) and MatchesDragInput(DragInput, Input) then
             local Delta = Input.Position - StartPos
             local NewX = FramePos.X.Offset + Delta.X
             local NewY = FramePos.Y.Offset + Delta.Y
@@ -2439,6 +2460,7 @@ function Library:MakeResizable(UI: GuiObject, DragFrame: GuiObject, Callback: ()
     local StartPos
     local FrameSize
     local Dragging = false
+    local DragInput: InputObject?
     local Changed
     local InputBegan
     local InputChanged
@@ -2451,6 +2473,7 @@ function Library:MakeResizable(UI: GuiObject, DragFrame: GuiObject, Callback: ()
         StartPos = Input.Position
         FrameSize = UI.Size
         Dragging = true
+        DragInput = Input
 
         Changed = Input.Changed:Connect(function()
             if Input.UserInputState ~= Enum.UserInputState.End then
@@ -2458,6 +2481,7 @@ function Library:MakeResizable(UI: GuiObject, DragFrame: GuiObject, Callback: ()
             end
 
             Dragging = false
+            DragInput = nil
             if Changed and Changed.Connected then
                 Changed:Disconnect()
                 Changed = nil
@@ -2468,6 +2492,7 @@ function Library:MakeResizable(UI: GuiObject, DragFrame: GuiObject, Callback: ()
     InputChanged = UserInputService.InputChanged:Connect(function(Input: InputObject)
         if not UI.Visible or not (ScreenGui and ScreenGui.Parent) then
             Dragging = false
+            DragInput = nil
             if Changed and Changed.Connected then
                 Changed:Disconnect()
                 Changed = nil
@@ -2476,7 +2501,7 @@ function Library:MakeResizable(UI: GuiObject, DragFrame: GuiObject, Callback: ()
             return
         end
 
-        if Dragging and IsHoverInput(Input) then
+        if Dragging and IsHoverInput(Input) and MatchesDragInput(DragInput, Input) then
             local Delta = Input.Position - StartPos
             UI.Size = UDim2.new(
                 FrameSize.X.Scale,
@@ -3140,7 +3165,7 @@ function Library:MakeBoxPopOut(Box: any, Options: {
     end))
 
     Library:GiveSignal(UserInputService.InputChanged:Connect(function(Input: InputObject)
-        if IsHoverInput(Input) then
+        if IsHoverInput(Input) and MatchesDragInput(DragInput, Input) then
             UpdateDrag(Input)
         end
     end))
@@ -5754,12 +5779,12 @@ do
 
             table.insert(ColorPicker.Connections, ResizeGrabber.InputBegan:Connect(function(Input: InputObject)
                 Library.CantDragForced = true
-                local StartMouse = Vector2.new(Mouse.X, Mouse.Y)
+                local StartMouse = Vector2.new(Input.Position.X, Input.Position.Y)
                 local StartWidth = ColorPicker.MapWidth
                 local StartHeight = ColorPicker.MapHeight
 
                 while IsDragInput(Input) and not ColorPicker.Destroyed do
-                    local Delta = Vector2.new(Mouse.X, Mouse.Y) - StartMouse
+                    local Delta = Vector2.new(Input.Position.X, Input.Position.Y) - StartMouse
                     UpdateColorMenuSize(StartWidth + Delta.X, StartHeight + Delta.Y)
 
                     RunService.RenderStepped:Wait()
@@ -14140,6 +14165,7 @@ function Library:CreateWindow(WindowInfo)
         local Threshold = (WindowInfo.MinSidebarWidth + WindowInfo.SidebarCompactWidth) * WindowInfo.SidebarCollapseThreshold
         local StartPos, StartWidth
         local Dragging = false
+        local GrabberInput: InputObject?
         local Changed
 
         local SidebarGrabber = New("TextButton", {
@@ -14174,6 +14200,7 @@ function Library:CreateWindow(WindowInfo)
             StartPos = Input.Position
             StartWidth = Window:GetSidebarWidth()
             Dragging = true
+            GrabberInput = Input
 
             Changed = Input.Changed:Connect(function()
                 if Input.UserInputState ~= Enum.UserInputState.End then
@@ -14186,6 +14213,7 @@ function Library:CreateWindow(WindowInfo)
                 }):Play()
 
                 Dragging = false
+                GrabberInput = nil
                 if Changed and Changed.Connected then
                     Changed:Disconnect()
                     Changed = nil
@@ -14196,6 +14224,7 @@ function Library:CreateWindow(WindowInfo)
         Library:GiveSignal(UserInputService.InputChanged:Connect(function(Input: InputObject)
             if not Library.Toggled or not (ScreenGui and ScreenGui.Parent) then
                 Dragging = false
+                GrabberInput = nil
                 if Changed and Changed.Connected then
                     Changed:Disconnect()
                     Changed = nil
@@ -14204,7 +14233,7 @@ function Library:CreateWindow(WindowInfo)
                 return
             end
 
-            if Dragging and IsHoverInput(Input) then
+            if Dragging and IsHoverInput(Input) and MatchesDragInput(GrabberInput, Input) then
                 local Delta = Input.Position - StartPos
                 local Width = StartWidth + Delta.X
 
