@@ -688,6 +688,23 @@ local function WaitForEvent(Event, Timeout, Condition)
     return Result
 end
 
+local function MatchesDragInput(StartedInput: InputObject?, Input: InputObject): boolean
+    if not StartedInput then
+        return false
+    end
+
+    local StartedType = StartedInput.UserInputType
+    if StartedType == Enum.UserInputType.Touch then
+        return Input == StartedInput
+    elseif StartedType == Enum.UserInputType.MouseButton1
+        or StartedType == Enum.UserInputType.MouseButton2
+    then
+        return Input.UserInputType == Enum.UserInputType.MouseMovement
+    end
+
+    return false
+end
+
 local function IsMouseInput(Input: InputObject, IncludeM2: boolean?)
     return Input.UserInputType == Enum.UserInputType.MouseButton1
         or (IncludeM2 == true and Input.UserInputType == Enum.UserInputType.MouseButton2)
@@ -1486,6 +1503,10 @@ function Library:SetDPIScale(DPIScale: number)
 
     for _, Notification in Library.Notifications do
         Notification:Resize()
+    end
+
+    if Library.Window and Library.Window.RefitTitle then
+        task.defer(Library.Window.RefitTitle, Library.Window)
     end
 end
 
@@ -2288,6 +2309,7 @@ function Library:MakeDraggable(
     local StartPos
     local FramePos
     local Dragging = false
+    local DragInput: InputObject?
     local Changed
     local InputBegan
     local InputChanged
@@ -2341,6 +2363,7 @@ function Library:MakeDraggable(
         StartPos = Input.Position
         FramePos = UI.Position
         Dragging = true
+        DragInput = Input
 
         Changed = Input.Changed:Connect(function()
             if Input.UserInputState ~= Enum.UserInputState.End then
@@ -2348,6 +2371,7 @@ function Library:MakeDraggable(
             end
 
             Dragging = false
+            DragInput = nil
             HideSnapGuides()
 
             if Changed and Changed.Connected then
@@ -2364,6 +2388,7 @@ function Library:MakeDraggable(
             or not (ScreenGui and ScreenGui.Parent)
         then
             Dragging = false
+            DragInput = nil
             HideSnapGuides()
 
             if Changed and Changed.Connected then
@@ -2374,7 +2399,7 @@ function Library:MakeDraggable(
             return
         end
 
-        if Dragging and IsHoverInput(Input) then
+        if Dragging and IsHoverInput(Input) and MatchesDragInput(DragInput, Input) then
             local Delta = Input.Position - StartPos
             local NewX = FramePos.X.Offset + Delta.X
             local NewY = FramePos.Y.Offset + Delta.Y
@@ -2454,6 +2479,7 @@ function Library:MakeResizable(UI: GuiObject, DragFrame: GuiObject, Callback: ()
     local StartPos
     local FrameSize
     local Dragging = false
+    local DragInput: InputObject?
     local Changed
     local InputBegan
     local InputChanged
@@ -2466,6 +2492,7 @@ function Library:MakeResizable(UI: GuiObject, DragFrame: GuiObject, Callback: ()
         StartPos = Input.Position
         FrameSize = UI.Size
         Dragging = true
+        DragInput = Input
 
         Changed = Input.Changed:Connect(function()
             if Input.UserInputState ~= Enum.UserInputState.End then
@@ -2473,6 +2500,7 @@ function Library:MakeResizable(UI: GuiObject, DragFrame: GuiObject, Callback: ()
             end
 
             Dragging = false
+            DragInput = nil
             if Changed and Changed.Connected then
                 Changed:Disconnect()
                 Changed = nil
@@ -2483,6 +2511,7 @@ function Library:MakeResizable(UI: GuiObject, DragFrame: GuiObject, Callback: ()
     InputChanged = UserInputService.InputChanged:Connect(function(Input: InputObject)
         if not UI.Visible or not (ScreenGui and ScreenGui.Parent) then
             Dragging = false
+            DragInput = nil
             if Changed and Changed.Connected then
                 Changed:Disconnect()
                 Changed = nil
@@ -2491,8 +2520,9 @@ function Library:MakeResizable(UI: GuiObject, DragFrame: GuiObject, Callback: ()
             return
         end
 
-        if Dragging and IsHoverInput(Input) then
-            local Delta = Input.Position - StartPos
+        if Dragging and IsHoverInput(Input) and MatchesDragInput(DragInput, Input) then
+            local Scale = Library.DPIScale ~= 0 and Library.DPIScale or 1
+            local Delta = (Input.Position - StartPos) / Scale
             UI.Size = UDim2.new(
                 FrameSize.X.Scale,
                 math.clamp(FrameSize.X.Offset + Delta.X, Library.MinSize.X, math.huge),
@@ -3155,7 +3185,7 @@ function Library:MakeBoxPopOut(Box: any, Options: {
     end))
 
     Library:GiveSignal(UserInputService.InputChanged:Connect(function(Input: InputObject)
-        if IsHoverInput(Input) then
+        if IsHoverInput(Input) and MatchesDragInput(DragInput, Input) then
             UpdateDrag(Input)
         end
     end))
@@ -3389,18 +3419,28 @@ function Library:AddDraggableButton(...)
     end
     Library:AddOutline(Button)
 
-    local PressPosition
+    local MaxClickDistance = ExcludeDragging and 12 or math.huge
     Button.InputBegan:Connect(function(Input: InputObject)
-        if IsMouseInput(Input) then
-            PressPosition = Button.AbsolutePosition
-        end
-    end)
-    Button.Activated:Connect(function()
-        if PressPosition and (Button.AbsolutePosition - PressPosition).Magnitude > 10 then
+        if not IsClickInput(Input) then
             return
         end
 
-        Library:SafeCallback(Func, DraggableButton)
+        local StartPos = Input.Position
+        local Changed
+        Changed = Input.Changed:Connect(function()
+            if Input.UserInputState ~= Enum.UserInputState.End then
+                return
+            end
+
+            if (Input.Position - StartPos).Magnitude <= MaxClickDistance then
+                Library:SafeCallback(Func, DraggableButton)
+            end
+
+            if Changed and Changed.Connected then
+                Changed:Disconnect()
+                Changed = nil
+            end
+        end)
     end)
 
     function DraggableButton:SetText(Text: string)
@@ -3410,9 +3450,7 @@ function Library:AddDraggableButton(...)
         Button.Size = UDim2.fromOffset(X * 2, Y * 2)
     end
 
-    if not ExcludeDragging then
-        Library:MakeDraggable(Button, Button, true)
-    end
+    Library:MakeDraggable(Button, Button, true)
     DraggableButton:SetText(Text)
     DraggableButton.Button = Button
 
@@ -3577,18 +3615,28 @@ function Library:AddDraggableImageButton(...)
     end
     Library:AddOutline(Button)
 
-    local PressPosition
+    local MaxClickDistance = ExcludeDragging and 12 or math.huge
     Button.InputBegan:Connect(function(Input: InputObject)
-        if IsMouseInput(Input) then
-            PressPosition = Button.AbsolutePosition
-        end
-    end)
-    Button.Activated:Connect(function()
-        if PressPosition and (Button.AbsolutePosition - PressPosition).Magnitude > 10 then
+        if not IsClickInput(Input) then
             return
         end
 
-        Library:SafeCallback(Func, DraggableImageButton)
+        local StartPos = Input.Position
+        local Changed
+        Changed = Input.Changed:Connect(function()
+            if Input.UserInputState ~= Enum.UserInputState.End then
+                return
+            end
+
+            if (Input.Position - StartPos).Magnitude <= MaxClickDistance then
+                Library:SafeCallback(Func, DraggableImageButton)
+            end
+
+            if Changed and Changed.Connected then
+                Changed:Disconnect()
+                Changed = nil
+            end
+        end)
     end)
 
     function DraggableImageButton:SetIcon(NewIcon: string)
@@ -3606,9 +3654,7 @@ function Library:AddDraggableImageButton(...)
         Button.Size = UDim2.fromOffset(IconSize + 12, IconSize + 12)
     end
 
-    if not ExcludeDragging then
-        Library:MakeDraggable(Button, Button, true)
-    end
+    Library:MakeDraggable(Button, Button, true)
     DraggableImageButton:SetIcon(Icon)
     DraggableImageButton.Button = Button
 
@@ -5776,12 +5822,12 @@ do
 
             table.insert(ColorPicker.Connections, ResizeGrabber.InputBegan:Connect(function(Input: InputObject)
                 Library.CantDragForced = true
-                local StartMouse = Vector2.new(Mouse.X, Mouse.Y)
+                local StartMouse = Vector2.new(Input.Position.X, Input.Position.Y)
                 local StartWidth = ColorPicker.MapWidth
                 local StartHeight = ColorPicker.MapHeight
 
                 while IsDragInput(Input) and not ColorPicker.Destroyed do
-                    local Delta = Vector2.new(Mouse.X, Mouse.Y) - StartMouse
+                    local Delta = Vector2.new(Input.Position.X, Input.Position.Y) - StartMouse
                     UpdateColorMenuSize(StartWidth + Delta.X, StartHeight + Delta.Y)
 
                     RunService.RenderStepped:Wait()
@@ -6161,11 +6207,11 @@ do
             while IsDragInput(Input) and not ColorPicker.Destroyed do
                 local MinX = SatVipMap.AbsolutePosition.X
                 local MaxX = MinX + SatVipMap.AbsoluteSize.X
-                local LocationX = math.clamp(Mouse.X, MinX, MaxX)
+                local LocationX = math.clamp(Input.Position.X, MinX, MaxX)
 
                 local MinY = SatVipMap.AbsolutePosition.Y
                 local MaxY = MinY + SatVipMap.AbsoluteSize.Y
-                local LocationY = math.clamp(Mouse.Y, MinY, MaxY)
+                local LocationY = math.clamp(Input.Position.Y, MinY, MaxY)
 
                 local OldSat = ColorPicker.Sat
                 local OldVib = ColorPicker.Vib
@@ -6184,7 +6230,7 @@ do
             while IsDragInput(Input) and not ColorPicker.Destroyed do
                 local Min = HueSelector.AbsolutePosition.Y
                 local Max = Min + HueSelector.AbsoluteSize.Y
-                local Location = math.clamp(Mouse.Y, Min, Max)
+                local Location = math.clamp(Input.Position.Y, Min, Max)
 
                 local OldHue = ColorPicker.Hue
                 ColorPicker.Hue = (Location - Min) / (Max - Min)
@@ -6202,7 +6248,7 @@ do
                 while IsDragInput(Input) and not ColorPicker.Destroyed do
                     local Min = TransparencySelector.AbsolutePosition.Y
                     local Max = TransparencySelector.AbsolutePosition.Y + TransparencySelector.AbsoluteSize.Y
-                    local Location = math.clamp(Mouse.Y, Min, Max)
+                    local Location = math.clamp(Input.Position.Y, Min, Max)
 
                     local OldTransparency = ColorPicker.Transparency
                     ColorPicker.Transparency = (Location - Min) / (Max - Min)
@@ -8291,7 +8337,7 @@ do
             end
 
             while IsDragInput(Input) and not Slider.Destroyed do
-                local Location = Mouse.X
+                local Location = Input.Position.X
                 local Scale = math.clamp((Location - Bar.AbsolutePosition.X) / Bar.AbsoluteSize.X, 0, 1)
 
                 local OldValue = Slider.Value
@@ -11057,6 +11103,7 @@ function Library:CreateWindow(WindowInfo)
     local DividerLine
     local TitleHolder
     local WindowTitle
+    local FitWindowTitle
     local WindowIcon
     local RightWrapper
     local SearchBox
@@ -11082,7 +11129,6 @@ function Library:CreateWindow(WindowInfo)
     local InitialLeftWidth = math.ceil(WindowInfo.Size.X.Offset * 0.3)
     local IsCompact = WindowInfo.SidebarCompacted
     local LastExpandedWidth = InitialLeftWidth
-    local RefreshWindowTitleSize
 
     do
         local KeybindFrame, KeybindContainer, _, KeybindDivider, KeybindLabelPadding = Library:AddDraggableMenu("Keybinds")
@@ -11466,7 +11512,7 @@ function Library:CreateWindow(WindowInfo)
 
         WindowTitle = New("TextLabel", {
             BackgroundTransparency = 1,
-            Size = UDim2.fromOffset(0, 0),
+            Size = UDim2.new(0, 0, 1, 0),
             Text = WindowInfo.Title,
             TextSize = 20,
             TextTruncate = Enum.TextTruncate.AtEnd,
@@ -11475,17 +11521,55 @@ function Library:CreateWindow(WindowInfo)
             Parent = TitleHolder,
         })
 
-        RefreshWindowTitleSize = function()
-            local IconWidth = 0
-            if WindowIcon and WindowIcon.Visible then
-                IconWidth = WindowIcon.Size.X.Offset + 6
+        --// Fits the title (and icon) into the sidebar header. Guarantees at least
+        --// TitleMinChars characters stay visible by shrinking the icon first, then the text.
+        local TitleMaxTextSize, TitleMinTextSize = 20, 8
+        local TitleMinChars = 10
+        local TitleMinIconSize = 16
+
+        FitWindowTitle = function()
+            local Title = WindowInfo.Title
+            local HolderWidth = TitleHolder.Size.X.Offset
+            local HasIcon = WindowInfo.Icon ~= nil
+            local FullIconSize = WindowInfo.IconSize.X.Offset
+            local IconSize = HasIcon and FullIconSize or 0
+
+            --// Measured width + safety margin: at fractional DPI scales (e.g. 75%) the text
+            --// renders at non-integer pixel sizes and the measurement can be slightly narrow.
+            local function Measure(Text, Size)
+                local Width = Library:GetTextBounds(Text, Library.Scheme.Font, Size)
+                return math.ceil(Width * 1.12) + 2
             end
 
-            local MaxWidth = math.max(0, (TitleHolder.AbsoluteSize.X / Library.DPIScale) - IconWidth - 12)
-            local NaturalWidth = Library:GetTextBounds(WindowTitle.Text, Library.Scheme.Font, WindowTitle.TextSize)
-            WindowTitle.Size = UDim2.new(0, math.min(NaturalWidth, MaxWidth), 1, 0)
+            local function Available(CurrentIconSize)
+                return HolderWidth - 12 - (HasIcon and (CurrentIconSize + 6) or 0)
+            end
+
+            --// Width needed to show the first N characters at the smallest text size
+            local Sample = utf8.len(Title) and Title:sub(1, (utf8.offset(Title, TitleMinChars + 1) or (#Title + 1)) - 1) or Title:sub(1, TitleMinChars)
+            local NeedMin = Measure(Sample, TitleMinTextSize)
+
+            --// 1) shrink the icon if the minimum characters wouldn't fit
+            if HasIcon and Available(IconSize) < NeedMin then
+                IconSize = math.clamp(HolderWidth - 12 - 6 - NeedMin, TitleMinIconSize, FullIconSize)
+            end
+            if HasIcon and WindowIcon then
+                WindowIcon.Size = UDim2.fromOffset(IconSize, IconSize * (WindowInfo.IconSize.Y.Offset / math.max(1, FullIconSize)))
+            end
+
+            --// 2) shrink the text until the whole title fits (or we hit the minimum)
+            local Avail = math.max(0, Available(IconSize))
+            local TextSize = TitleMaxTextSize
+            local Width = Measure(Title, TextSize)
+            while Width > Avail and TextSize > TitleMinTextSize do
+                TextSize -= 1
+                Width = Measure(Title, TextSize)
+            end
+
+            WindowTitle.TextSize = TextSize
+            WindowTitle.Size = UDim2.new(0, math.min(Width, Avail), 1, 0)
         end
-        RefreshWindowTitleSize()
+        FitWindowTitle()
 
         --// Top Right Bar \\--
         RightWrapper = New("Frame", {
@@ -11679,13 +11763,18 @@ function Library:CreateWindow(WindowInfo)
         --// Resize Button \\--
         if WindowInfo.Resizable then
             ResizeButton = New("TextButton", {
-                AnchorPoint = Vector2.new(1, 0),
-                BackgroundTransparency = 1,
-                Position = UDim2.new(1, -WindowInfo.CornerRadius / 4, 0, 0),
-                Size = UDim2.fromScale(1, 1),
+                AnchorPoint = Vector2.new(1, 0.5),
+                BackgroundColor3 = "BackgroundColor",
+                BackgroundTransparency = 0,
+                Position = UDim2.new(1, -WindowInfo.CornerRadius / 4, 0.5, 0),
+                Size = UDim2.fromScale(0.78, 0.78),
                 SizeConstraint = Enum.SizeConstraint.RelativeYY,
                 Text = "",
                 Parent = BottomBar,
+            })
+            New("UICorner", {
+                CornerRadius = UDim.new(0, Library.CornerRadius),
+                Parent = ResizeButton,
             })
 
             Library:MakeResizable(MainFrame, ResizeButton, function()
@@ -11765,16 +11854,23 @@ function Library:CreateWindow(WindowInfo)
         UICorner[Corner] = HalfValue
     end
 
+    --// Re-fits the sidebar title/icon (called automatically when the DPI scale changes)
+    function Window:RefitTitle()
+        if FitWindowTitle then
+            FitWindowTitle()
+        end
+    end
+
+    function Window:RefreshTitleSize()
+        Window:RefitTitle()
+    end
+
     function Window:ChangeTitle(title)
         assert(typeof(title) == "string", "Expected string for title got: " .. typeof(title))
 
         WindowTitle.Text = title
         WindowInfo.Title = title
-        RefreshWindowTitleSize()
-    end
-
-    function Window:RefreshTitleSize()
-        RefreshWindowTitleSize()
+        FitWindowTitle()
     end
 
     function Window:SetBackgroundImage(Image: string)
@@ -11892,7 +11988,7 @@ function Library:CreateWindow(WindowInfo)
         WindowInfo.CornerRadius = Radius
 
         if ResizeButton then
-            ResizeButton.Position = UDim2.new(1, -Radius / 4, 0, 0)
+            ResizeButton.Position = UDim2.new(1, -Radius / 4, 0.5, 0)
         end
         if BottomBackgroundCorner then
             BottomBackground.Size = UDim2.new(1, 0, 0, math.max(20, Radius * 2))
@@ -12025,6 +12121,7 @@ function Library:CreateWindow(WindowInfo)
         DividerLine.Position = UDim2.fromOffset(Width, 0)
 
         TitleHolder.Size = UDim2.new(0, Width, 1, 0)
+        FitWindowTitle()
         RightWrapper.Size = UDim2.new(1, -Width - 57 - 1, 1, -16)
         Tabs.Size = UDim2.new(0, Width, 1, -70)
         Container.Size = UDim2.new(1, -Width - 1, 1, -70)
@@ -12032,8 +12129,6 @@ function Library:CreateWindow(WindowInfo)
         if WindowInfo.EnableCompacting then
             ApplyCompact()
         end
-    
-        RefreshWindowTitleSize()
         if not IsCompact then
             LastExpandedWidth = Width
         end
@@ -12062,6 +12157,7 @@ function Library:CreateWindow(WindowInfo)
         local Description = nil
         local Tooltip = nil
         local Order = nil
+        local Default = false
 
         if select("#", ...) == 1 and typeof(...) == "table" then
             local Info = select(1, ...)
@@ -12070,6 +12166,7 @@ function Library:CreateWindow(WindowInfo)
             Description = Info.Description
             Tooltip = Info.Tooltip
             Order = Info.Order
+            Default = Info.Default == true
         else
             Name = select(1, ...)
             Icon = select(2, ...)
@@ -13434,8 +13531,22 @@ function Library:CreateWindow(WindowInfo)
             Tab.TooltipTable = Library:AddTooltip(Tooltip, nil, TabButton)
         end
 
-        if not Library.ActiveTab then
-            Tab:Show()
+        if Default == true or not Window.PendingDefaultTab then
+            Window.PendingDefaultTab = Tab
+        end
+
+        if not Window.DefaultTabQueued then
+            Window.DefaultTabQueued = true
+            task.defer(function()
+                Window.DefaultTabQueued = nil
+                local Chosen = Window.PendingDefaultTab
+                Window.PendingDefaultTab = nil
+                Window.DefaultTab = Chosen
+
+                if Chosen and not Library.ActiveTab then
+                    Chosen:Show()
+                end
+            end)
         end
 
         TabButton.MouseEnter:Connect(function()
@@ -13447,6 +13558,27 @@ function Library:CreateWindow(WindowInfo)
         TabButton.MouseButton1Click:Connect(Tab.Show)
 
         Library.Tabs[Name] = Tab
+
+        return Tab
+    end
+
+    function Window:SetDefaultTab(TabOrName)
+        local Tab = TabOrName
+        if typeof(Tab) == "string" then
+            Tab = Library.Tabs[Tab]
+        end
+
+        assert(
+            typeof(Tab) == "table" and typeof(Tab.Show) == "function",
+            "SetDefaultTab expects a Tab instance or a tab name"
+        )
+
+        Window.DefaultTab = Tab
+        Window.PendingDefaultTab = Tab
+
+        if not Window.DefaultTabQueued then
+            Tab:Show()
+        end
 
         return Tab
     end
@@ -14461,6 +14593,7 @@ function Library:CreateWindow(WindowInfo)
         local Threshold = (WindowInfo.MinSidebarWidth + WindowInfo.SidebarCompactWidth) * WindowInfo.SidebarCollapseThreshold
         local StartPos, StartWidth
         local Dragging = false
+        local GrabberInput: InputObject?
         local Changed
 
         local SidebarGrabber = New("TextButton", {
@@ -14495,6 +14628,7 @@ function Library:CreateWindow(WindowInfo)
             StartPos = Input.Position
             StartWidth = Window:GetSidebarWidth()
             Dragging = true
+            GrabberInput = Input
 
             Changed = Input.Changed:Connect(function()
                 if Input.UserInputState ~= Enum.UserInputState.End then
@@ -14507,6 +14641,7 @@ function Library:CreateWindow(WindowInfo)
                 }):Play()
 
                 Dragging = false
+                GrabberInput = nil
                 if Changed and Changed.Connected then
                     Changed:Disconnect()
                     Changed = nil
@@ -14517,6 +14652,7 @@ function Library:CreateWindow(WindowInfo)
         Library:GiveSignal(UserInputService.InputChanged:Connect(function(Input: InputObject)
             if not Library.Toggled or not (ScreenGui and ScreenGui.Parent) then
                 Dragging = false
+                GrabberInput = nil
                 if Changed and Changed.Connected then
                     Changed:Disconnect()
                     Changed = nil
@@ -14525,7 +14661,7 @@ function Library:CreateWindow(WindowInfo)
                 return
             end
 
-            if Dragging and IsHoverInput(Input) then
+            if Dragging and IsHoverInput(Input) and MatchesDragInput(GrabberInput, Input) then
                 local Delta = Input.Position - StartPos
                 local Width = StartWidth + Delta.X
 
@@ -14554,12 +14690,12 @@ function Library:CreateWindow(WindowInfo)
     if Library.IsMobile then
         local ToggleButton = Library:AddDraggableButton("Toggle", function()
             Library:Toggle()
-        end, true)
+        end, true, true)
 
         local LockButton = Library:AddDraggableButton("Lock", function(self)
             Library.CantDragForced = not Library.CantDragForced
             self:SetText(Library.CantDragForced and "Unlock" or "Lock")
-        end, true)
+        end, true, true)
 
         if WindowInfo.MobileButtonsSide == "Right" then
             ToggleButton.Button.AnchorPoint = Vector2.new(1, 0)
@@ -14786,15 +14922,15 @@ function Library:CreateLoading(LoadingInfo)
         })
     end
 
-    local LoadingIconWidth = LoadingInfo.Icon and (LoadingInfo.IconSize.X.Offset + 6) or 0
-    local LoadingMaxWidth = math.max(0, (TitleHolder.AbsoluteSize.X / Library.DPIScale) - LoadingIconWidth - 12)
-    local LoadingTitleWidth = math.min(
-        Library:GetTextBounds(LoadingInfo.Title, Library.Scheme.Font, 20),
-        LoadingMaxWidth
+    local TitleX = Library:GetTextBounds(
+        LoadingInfo.Title,
+        Library.Scheme.Font,
+        20,
+        (TitleHolder.AbsoluteSize.X / Library.DPIScale) - (LoadingInfo.Icon and (LoadingInfo.IconSize.X.Offset + 6) or 0) - 12
     )
     local _WindowTitle = New("TextLabel", {
         BackgroundTransparency = 1,
-        Size = UDim2.new(0, LoadingTitleWidth, 1, 0),
+        Size = UDim2.new(0, TitleX, 1, 0),
         Text = LoadingInfo.Title,
         TextSize = 20,
         TextTruncate = Enum.TextTruncate.AtEnd,
