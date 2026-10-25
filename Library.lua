@@ -4571,11 +4571,27 @@ do
         local KeybindsToggle = { Normal = KeyPicker.Mode ~= "Toggle" }
         do
             local Holder = New("TextButton", {
+                BackgroundColor3 = "MainColor",
                 BackgroundTransparency = 1,
                 Size = UDim2.new(1, 0, 0, 16),
                 Text = "",
                 Visible = not Info.NoUI,
                 Parent = Library.KeybindContainer,
+            })
+            table.insert(
+                Library.Corners,
+                New("UICorner", {
+                    CornerRadius = UDim.new(0, Library.CornerRadius / 2),
+                    Parent = Holder,
+                })
+            )
+            local ButtonStroke = New("UIStroke", {
+                Color = "OutlineColor",
+                Enabled = false,
+                Parent = Holder,
+            })
+            local ButtonPadding = New("UIPadding", {
+                Parent = Holder,
             })
 
             local Label = New("TextLabel", {
@@ -4585,6 +4601,7 @@ do
                 Text = "",
                 TextSize = 14,
                 TextTransparency = 0.5,
+                TextXAlignment = Enum.TextXAlignment.Left,
                 Parent = Holder,
             })
 
@@ -4620,6 +4637,12 @@ do
             end
 
             function KeybindsToggle:Display(State)
+                if KeyPicker.Mode == "Press" then
+                    Label.TextTransparency = 0.4
+                    CheckImage.ImageTransparency = 1
+                    return
+                end
+
                 Label.TextTransparency = State and 0 or 0.5
                 CheckImage.ImageTransparency = State and 0 or 1
             end
@@ -4635,13 +4658,29 @@ do
             function KeybindsToggle:SetNormal(Normal)
                 KeybindsToggle.Normal = Normal
 
-                Holder.Active = not Normal
-                Label.Position = Normal and UDim2.fromOffset(0, 0) or UDim2.fromOffset(22, 0)
+                local IsPress = KeyPicker.Mode == "Press"
+                Holder.Active = not Normal or IsPress
                 Checkbox.Visible = not Normal
+                ButtonStroke.Enabled = IsPress
+                Holder.BackgroundTransparency = IsPress and 0 or 1
+                Holder.AutomaticSize = IsPress and Enum.AutomaticSize.X or Enum.AutomaticSize.None
+                Holder.Size = IsPress and UDim2.fromOffset(0, 20) or UDim2.new(1, 0, 0, 16)
+                ButtonPadding.PaddingLeft = UDim.new(0, IsPress and 8 or 0)
+                ButtonPadding.PaddingRight = UDim.new(0, IsPress and 8 or 0)
+
+                Label.AutomaticSize = Enum.AutomaticSize.X
+                Label.Size = UDim2.fromScale(0, 1)
+                Label.TextXAlignment = Enum.TextXAlignment.Left
+                Label.Position = (not IsPress and not Normal) and UDim2.fromOffset(22, 0) or UDim2.fromOffset(0, 0)
             end
 
             KeyPicker.DoClick = function(...) end --// make luau lsp shut up
             table.insert(KeyPicker.Connections, Holder.MouseButton1Click:Connect(function()
+                if KeyPicker.Mode == "Press" then
+                    KeyPicker:DoClick()
+                    return
+                end
+
                 if KeybindsToggle.Normal then
                     return
                 end
@@ -4649,6 +4688,16 @@ do
                 KeyPicker.Toggled = not KeyPicker.Toggled
                 KeyPicker:DoClick()
                 KeyPicker:Update()
+            end))
+            table.insert(KeyPicker.Connections, Holder.MouseEnter:Connect(function()
+                if KeyPicker.Mode == "Press" and not ParentObj.Disabled then
+                    Label.TextTransparency = 0
+                end
+            end))
+            table.insert(KeyPicker.Connections, Holder.MouseLeave:Connect(function()
+                if KeyPicker.Mode == "Press" then
+                    Label.TextTransparency = 0.4
+                end
             end))
 
             KeybindsToggle.Holder = Holder
@@ -4958,6 +5007,7 @@ do
 
             if KeyPicker.SyncToggleState and ParentObj.Value ~= State then
                 ParentObj:SetValue(State)
+                State = KeyPicker:GetState()
             end
 
             if Info.NoUI then
@@ -10567,6 +10617,13 @@ function Library:SetFont(FontFace)
 
     Library.Scheme.Font = FontFace
     Library:UpdateColorsUsingRegistry()
+
+    for _, Label in Labels do
+        if Label.DoesWrap then
+            Label:Display()
+            Label.Parent:Resize()
+        end
+    end
 
     if Library.Window and Library.Window.RefreshTitleSize then
         Library.Window:RefreshTitleSize()
